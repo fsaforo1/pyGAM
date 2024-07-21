@@ -263,7 +263,8 @@ class GAM(Core, MetaTermMixin):
         ):
             raise ValueError('unsupported distribution {}'.format(self.distribution))
         if self.distribution in DISTRIBUTIONS:
-            if self.distribution == "tweedie":
+            self.distribution_ = deepcopy(self.distribution)
+            if self.distribution_ == "tweedie":
                 self.distribution = DISTRIBUTIONS[self.distribution](p=self.tweedie_variance_power)
             else:
                 self.distribution = DISTRIBUTIONS[self.distribution]()
@@ -272,7 +273,7 @@ class GAM(Core, MetaTermMixin):
         if not ((self.link in LINKS) or isinstance(self.link, Link)):
             raise ValueError('unsupported link {}'.format(self.link))
         if self.link in LINKS:
-            if self.distribution == "tweedie":
+            if self.distribution_ == "tweedie":
                 self.link = LINKS[self.link](p==self.tweedie_variance_power)
             else:
                 self.link = LINKS[self.link]()
@@ -1033,7 +1034,7 @@ class GAM(Core, MetaTermMixin):
         self.statistics_['m_features'] = X.shape[1]
 
         # optimize
-        if self.family == "tweedie":
+        if self.distribution_ == "tweedie":
             self._pirls_tweedie(X, y, weights)
         else:
             self._pirls(X, y, weights)
