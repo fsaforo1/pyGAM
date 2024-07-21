@@ -722,6 +722,116 @@ class GAM(Core, MetaTermMixin):
         # not sure if this is faster...
         # return np.linalg.pinv(modelmat.T.dot(modelmat)).dot(modelmat.T.dot(y_))
 
+
+
+    def _pirls_tweedie(self, X, y, weights):
+        """
+        Performs stable PIRLS iterations to estimate GAM coefficients for Tweedie models
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, m_features)
+            Input data
+        y : array-like of shape (n_samples,)
+            Target values
+        weights : array-like of shape (n_samples,)
+            Sample weights
+
+        Returns
+        -------
+        None
+        """
+        # Build the model matrix
+        modelmat = self._modelmat(X)
+        n, m = modelmat.shape
+
+        # Initialize coefficients if necessary
+        if not self._is_fitted or len(self.coef_) != self.terms.n_coefs:
+            self.coef_ = self._initial_estimate(y, modelmat)
+
+        # Ensure coefficients are finite
+        assert np.isfinite(self.coef_).all(), f"Invalid initial coefficients: {self.coef_}"
+
+        # Prepare matrices for fitting
+        P = self._P()  # Penalty matrix
+        S = sp.sparse.diags(np.ones(m) * np.sqrt(np.finfo(float).eps))  # Improve conditioning
+
+        # Compute Cholesky decomposition if no constraints
+        if not self.terms.hasconstraint:
+            E = self._cholesky(S + P, sparse=False, verbose=self.verbose)
+
+        # Main PIRLS loop
+        for iter in range(self.max_iter):
+            # Recompute Cholesky if there are constraints
+            if self.terms.hasconstraint:
+                P = self._P()
+                C = self._C()
+                E = self._cholesky(S + P + C, sparse=False, verbose=self.verbose)
+
+            # Compute linear predictor and mean
+            lp = self._linear_predictor(modelmat=modelmat)
+            mu = self.link.mu(lp, self.distribution)
+            mu = np.maximum(mu, np.finfo(float).eps)  # Ensure positive values
+
+            # Compute weights for Tweedie distribution
+            w = weights / (mu ** (self.tweedie_variance_power - 2))
+            W = sp.sparse.diags(w)
+
+            # Compute working residuals
+            z = (y - mu) / mu**(self.tweedie_variance_power - 1)
+
+            # Mask invalid values
+            mask = self._mask(W.diagonal())
+            y_masked = y[mask]
+            mu_masked = mu[mask]
+            z_masked = z[mask]
+            W_masked = sp.sparse.diags(W.diagonal()[mask])
+
+            # Compute pseudo-data
+            pseudo_data = lp[mask] + z_masked / self.link.gradient(mu_masked, self.distribution)
+
+            # Log iteration start
+            self._on_loop_start(vars())
+
+            # Compute weighted model matrix
+            WB = W_masked.dot(modelmat[mask, :])
+            Q, R = np.linalg.qr(WB.A)
+
+            # Check for numerical issues in QR decomposition
+            if not (np.isfinite(Q).all() and np.isfinite(R).all()):
+                raise ValueError('QR decomposition produced NaN or Inf. Check input data.')
+
+            # SVD for coefficient update
+            U, d, Vt = np.linalg.svd(np.vstack([R, E]))
+            
+            # Compute new coefficients
+            idx = d > (d.max() * np.sqrt(np.finfo(float).eps))
+            d_inv = np.zeros_like(d)
+            d_inv[idx] = 1 / d[idx]
+            
+            B = (Vt.T * d_inv) @ U.T
+            coef_new = (B @ Q.T @ pseudo_data).flatten()
+
+            # Check for convergence
+            diff = np.linalg.norm(self.coef_ - coef_new) / np.linalg.norm(coef_new)
+            self.coef_ = coef_new
+
+            # Log iteration end
+            self._on_loop_end(vars())
+
+            if diff < self.tol:
+                break
+
+        # Estimate model statistics
+        self._estimate_model_statistics(
+            y, modelmat, weights=weights
+        )
+
+        if diff >= self.tol:
+            print('PIRLS did not converge. Consider increasing max_iter.')
+
+        return
+
     def _pirls(self, X, Y, weights):
         """
         Performs stable PIRLS iterations to estimate GAM coefficients
@@ -923,7 +1033,10 @@ class GAM(Core, MetaTermMixin):
         self.statistics_['m_features'] = X.shape[1]
 
         # optimize
-        self._pirls(X, y, weights)
+        if self.family == "tweedie":
+            self._pirls_tweedie(X, y, weights)
+        else:
+            self._pirls(X, y, weights)
         # if self._opt == 0:
         #     self._pirls(X, y, weights)
         # if self._opt == 1:
