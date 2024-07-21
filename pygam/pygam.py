@@ -725,7 +725,7 @@ class GAM(Core, MetaTermMixin):
 
 
 
-    def _tweedie_pirls(self, X, Y, weights):
+    def(self, X, Y, weights):
         """
         Performs stable PIRLS iterations to estimate GAM coefficients for Tweedie distribution
 
@@ -1065,7 +1065,7 @@ class GAM(Core, MetaTermMixin):
 
         # optimize
         if self.distribution_ == "tweedie":
-            self._pirls_tweedie(X, y, weights)
+            self._tweedie_pirls(X, y, weights)
         else:
             self._pirls(X, y, weights)
         # if self._opt == 0:
