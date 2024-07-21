@@ -3560,3 +3560,168 @@ class ExpectileGAM(GAM):
             warnings.warn('maximum iterations reached')
 
         return self
+
+
+
+class TweedieGAM(GAM):
+    """Tweedie GAM
+
+    This is a GAM with a Tweedie error distribution and a power link function,
+    used for regression tasks.
+
+    Parameters
+    ----------
+    terms : expression specifying terms to model, optional.
+        By default a univariate spline term will be allocated for each feature.
+        For example:
+        >>> GAM(s(0) + l(1) + f(2) + te(3, 4))
+        will fit a spline term on feature 0, a linear term on feature 1,
+        a factor term on feature 2, and a tensor term on features 3 and 4.
+
+    tweedie_variance_power : float, optional (default=1.5)
+        The variance power parameter of the Tweedie distribution.
+        Must be greater than 1 and less than 2.
+
+    callbacks : list of str or list of CallBack objects, optional
+        Names of callback objects to call during the optimization loop.
+
+    fit_intercept : bool, optional
+        Specifies if a constant (a.k.a. bias or intercept) should be
+        added to the decision function.
+        Note: the intercept receives no smoothing penalty.
+
+    max_iter : int, optional
+        Maximum number of iterations allowed for the solver to converge.
+
+    tol : float, optional
+        Tolerance for stopping criteria.
+
+    verbose : bool, optional
+        whether to show pyGAM warnings.
+
+    Attributes
+    ----------
+    coef_ : array, shape (m_features,)
+        Coefficient of the features in the decision function.
+        If fit_intercept is True, then self.coef_[0] will contain the bias.
+
+    statistics_ : dict
+        Dictionary containing model statistics like GCV/UBRE scores, AIC/c,
+        parameter covariances, estimated degrees of freedom, etc.
+
+    logs_ : dict
+        Dictionary containing the outputs of any callbacks at each
+        optimization loop.
+        The logs are structured as ``{callback: [...]}``
+
+    References
+    ----------
+    Simon N. Wood, 2006
+    Generalized Additive Models: an introduction with R
+
+    Hastie, Tibshirani, Friedman
+    The Elements of Statistical Learning
+    http://statweb.stanford.edu/~tibs/ElemStatLearn/printings/ESLII_print10.pdf
+
+    Dunn, P.K. and Smyth, G.K., 2005
+    Series evaluation of Tweedie exponential dispersion model densities
+    Statistics and Computing, 15(4), pp.267-280.
+    """
+
+    def __init__(
+        self,
+        terms='auto',
+        tweedie_variance_power=1.5,
+        max_iter=100,
+        tol=1e-4,
+        callbacks=['deviance', 'diffs'],
+        fit_intercept=True,
+        verbose=False,
+        **kwargs,
+    ):
+        self.tweedie_variance_power = tweedie_variance_power
+        super(TweedieGAM, self).__init__(
+            terms=terms,
+            distribution=TweedieDist(tweedie_variance_power=self.tweedie_variance_power),
+            link=TweedieLink(tweedie_variance_power=self.tweedie_variance_power),
+            # distribution="tweedie",
+            # link="log_tweedie",
+            max_iter=max_iter,
+            tol=tol,
+            fit_intercept=fit_intercept,
+            verbose=verbose,
+            **kwargs,
+        )
+
+        self._exclude += ['distribution', 'link']
+
+    def _validate_params(self):
+        """
+        method to sanitize model parameters
+
+        Parameters
+        ---------
+        None
+
+        Returns
+        -------
+        None
+        """
+        if not 1 < self.tweedie_variance_power < 2:
+            raise ValueError("tweedie_variance_power must be between 1 and 2 for Tweedie distribution")
+        
+        self.distribution = TweedieDist(tweedie_variance_power=self.tweedie_variance_power)
+        self.link = TweedieLink(tweedie_variance_power=self.tweedie_variance_power)
+        super(TweedieGAM, self)._validate_params()
+
+    def prediction_intervals(self, X, width=0.95, quantiles=None):
+        """
+        estimate prediction intervals for TweedieGAM
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, m_features)
+            input data matrix
+        width : float on [0,1], optional (default=0.95)
+        quantiles : array-like of floats in [0, 1], default: None
+            instead of specifying the prediction width, one can specify the
+            quantiles. so width=.95 is equivalent to quantiles=[.025, .975]
+
+        Returns
+        -------
+        intervals: np.array of shape (n_samples, 2 or len(quantiles))
+        """
+        if not self._is_fitted:
+            raise AttributeError('GAM has not been fitted. Call fit first.')
+
+        X = check_X(
+            X,
+            n_feats=self.statistics_['m_features'],
+            edge_knots=self.edge_knots_,
+            dtypes=self.dtype,
+            features=self.feature,
+            verbose=self.verbose,
+        )
+
+        return self._get_quantiles(X, width, quantiles, prediction=True)
+
+    def fit(self, X, y, **kwargs):
+        """
+        Fit the GAM model
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, m_features)
+            Training vectors, where n_samples is the number of samples
+            and m_features is the number of features.
+
+        y : array-like, shape (n_samples,)
+            Target values (real numbers in regression)
+
+        Returns
+        -------
+        self : object
+            Returns fitted GAM object
+        """
+        y = check_y(y, self.link, self.distribution, verbose=self.verbose)
+        return super(TweedieGAM, self).fit(X, y, **kwargs)
