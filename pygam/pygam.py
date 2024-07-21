@@ -274,7 +274,7 @@ class GAM(Core, MetaTermMixin):
             raise ValueError('unsupported link {}'.format(self.link))
         if self.link in LINKS:
             if self.distribution_ == "tweedie":
-                self.link = LINKS[self.link](p==self.tweedie_variance_power)
+                self.link = LINKS[self.link](p=self.tweedie_variance_power)
             else:
                 self.link = LINKS[self.link]()
 
