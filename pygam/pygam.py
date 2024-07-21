@@ -725,7 +725,7 @@ class GAM(Core, MetaTermMixin):
 
 
 
-    def(self, X, Y, weights):
+    def _tweedie_pirls(self, X, Y, weights):
         """
         Performs stable PIRLS iterations to estimate GAM coefficients for Tweedie distribution
 
