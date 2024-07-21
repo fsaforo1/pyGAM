@@ -656,10 +656,126 @@ class InvGaussDist(Distribution):
         return np.random.wald(mean=mu, scale=self.scale, size=None)
 
 
+
+import numpy as np
+import scipy as sp
+from scipy import stats
+
+class TweedieDist(Distribution):
+    """
+    Tweedie Distribution
+    """
+    def __init__(self, p=1.5):
+        """
+        Creates an instance of the TweedieDist class
+        Parameters
+        ----------
+        p : float, default=1.5
+            The power parameter of the Tweedie distribution
+        Returns
+        -------
+        self
+        """
+        super(TweedieDist, self).__init__(name='tweedie', scale=1.0)
+        self._exclude.append('scale')
+        self.p = p
+
+    def log_pdf(self, y, mu, phi, weights=None):
+        """
+        Computes the log of the pdf of the values under the current distribution
+        Parameters
+        ----------
+        y : array-like of length n
+            target values
+        mu : array-like of length n
+            expected values
+        phi : float
+            dispersion parameter
+        weights : array-like shape (n,) or None, default: None
+            containing sample weights
+            if None, defaults to array of ones
+        Returns
+        -------
+        pdf : np.array of length n
+        """
+        if weights is None:
+            weights = np.ones_like(mu)
+        
+        # Tweedie log-likelihood calculation
+        a = -1 / (self.p - 1)
+        b = -1 / (2 - self.p)
+        c = (y**(2-self.p)) / ((2-self.p) * phi)
+        d = (mu**(2-self.p)) / ((2-self.p) * phi)
+        e = (y * mu**(1-self.p)) / ((1-self.p) * phi)
+        
+        return weights * (a * np.log(y/mu) + b * np.log(phi) + c - d + e)
+
+    @divide_weights
+    def V(self, mu):
+        """
+        GLM Variance function
+        Computes the variance of the distribution
+        Parameters
+        ----------
+        mu : array-like of length n
+            expected values
+        Returns
+        -------
+        variance : np.array of length n
+        """
+        return mu**self.p
+
+    @multiply_weights
+    def deviance(self, y, mu, scaled=True):
+        """
+        Model deviance
+        Parameters
+        ----------
+        y : array-like of length n
+            target values
+        mu : array-like of length n
+            expected values
+        scaled : boolean, default: True
+            whether to divide the deviance by the distribution scale
+        Returns
+        -------
+        deviances : np.array of length n
+        """
+        dev = 2 * ((y**(2-self.p))/(2-self.p) - y*mu**(1-self.p)/(1-self.p) + mu**(2-self.p)/(2-self.p))
+        if scaled:
+            dev /= self.scale
+        return dev
+
+    def sample(self, mu, phi, size=None):
+        """
+        Return random samples from this Tweedie distribution.
+        Parameters
+        ----------
+        mu : array-like of shape n_samples or shape (n_simulations, n_samples)
+            expected values
+        phi : float
+            dispersion parameter
+        size : int or tuple of ints, optional
+            Output shape. If the given shape is, e.g., (m, n, k), then m * n * k samples are drawn.
+        Returns
+        -------
+        random_samples : np.array of same shape as mu
+        """
+        # Note: This is a simplified sampling method and may not be accurate for all Tweedie distributions
+        gamma_shape = (2 - self.p) / (self.p - 1)
+        gamma_scale = phi * (mu**(self.p - 1)) / (2 - self.p)
+        
+        num_poisson = np.random.poisson(mu**(2-self.p) / (phi * (2-self.p)), size=size)
+        gamma_samples = np.random.gamma(shape=gamma_shape, scale=gamma_scale, size=size)
+        
+        return np.sum(gamma_samples, axis=-1) * (num_poisson > 0)
+
+
 DISTRIBUTIONS = {
     'normal': NormalDist,
     'poisson': PoissonDist,
     'binomial': BinomialDist,
     'gamma': GammaDist,
     'inv_gauss': InvGaussDist,
+    'tweedie': TweedieDist,
 }

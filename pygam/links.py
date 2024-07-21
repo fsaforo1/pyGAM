@@ -338,10 +338,75 @@ class InvSquaredLink(Link):
         return -2 * mu**-3.0
 
 
+class TweedieLink(Link):
+    def __init__(self, p=1.5):
+        """
+        Creates an instance of a TweedieLink object
+
+        Parameters
+        ----------
+        p : float, default: 1.5
+            The power parameter of the Tweedie distribution
+
+        Returns
+        -------
+        self
+        """
+        super(TweedieLink, self).__init__(name='tweedie')
+        self.p = p
+
+    def link(self, mu, dist):
+        """
+        GLM link function
+        This is useful for going from mu to the linear prediction
+
+        Parameters
+        ----------
+        mu : array-like of length n
+        dist : Distribution instance
+
+        Returns
+        -------
+        lp : np.array of length n
+        """
+        return mu**(1 - self.p)
+
+    def mu(self, lp, dist):
+        """
+        GLM mean function, i.e., inverse of link function
+        This is useful for going from the linear prediction to mu
+
+        Parameters
+        ----------
+        lp : array-like of length n
+        dist : Distribution instance
+
+        Returns
+        -------
+        mu : np.array of length n
+        """
+        return np.power(lp, 1 / (1 - self.p))
+
+    def gradient(self, mu, dist):
+        """
+        Derivative of the link function with respect to mu
+
+        Parameters
+        ----------
+        mu : array-like of length n
+        dist : Distribution instance
+
+        Returns
+        -------
+        grad : np.array of length n
+        """
+        return (1 - self.p) * mu**(-self.p)
+
 LINKS = {
     'identity': IdentityLink,
     'log': LogLink,
     'logit': LogitLink,
     'inverse': InverseLink,
     'inv_squared': InvSquaredLink,
+    'log_tweedie': TweedieLink
 }

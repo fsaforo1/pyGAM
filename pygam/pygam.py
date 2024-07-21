@@ -27,6 +27,7 @@ from pygam.distributions import BinomialDist  # noqa: F401
 from pygam.distributions import PoissonDist  # noqa: F401
 from pygam.distributions import GammaDist  # noqa: F401
 from pygam.distributions import InvGaussDist  # noqa: F401
+from pygam.distributions import TweedieDist  # noqa: F401
 from pygam.distributions import DISTRIBUTIONS  # noqa: F401
 
 from pygam.links import Link  # noqa: F401
@@ -153,6 +154,7 @@ class GAM(Core, MetaTermMixin):
         tol=1e-4,
         distribution='normal',
         link='identity',
+        tweedie_variance_power=1.5,
         callbacks=['deviance', 'diffs'],
         fit_intercept=True,
         verbose=False,
@@ -161,7 +163,12 @@ class GAM(Core, MetaTermMixin):
         self.max_iter = max_iter
         self.tol = tol
         self.distribution = distribution
-        self.link = link
+
+        if distribution == 'tweedie':
+            self.link = 'log_tweedie'
+        else:
+            self.link = link
+        self.tweedie_variance_power = tweedie_variance_power
         self.callbacks = callbacks
         self.verbose = verbose
         self.terms = TermList(terms) if isinstance(terms, Term) else terms
@@ -256,13 +263,19 @@ class GAM(Core, MetaTermMixin):
         ):
             raise ValueError('unsupported distribution {}'.format(self.distribution))
         if self.distribution in DISTRIBUTIONS:
-            self.distribution = DISTRIBUTIONS[self.distribution]()
+            if self.distribution == "tweedie":
+                self.distribution = DISTRIBUTIONS[self.distribution](p=self.tweedie_variance_power)
+            else:
+                self.distribution = DISTRIBUTIONS[self.distribution]()
 
         # link
         if not ((self.link in LINKS) or isinstance(self.link, Link)):
             raise ValueError('unsupported link {}'.format(self.link))
         if self.link in LINKS:
-            self.link = LINKS[self.link]()
+            if self.distribution == "tweedie":
+                self.link = LINKS[self.link](p==self.tweedie_variance_power)
+            else:
+                self.link = LINKS[self.link]()
 
         # callbacks
         if not isiterable(self.callbacks):
