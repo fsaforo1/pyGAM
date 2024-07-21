@@ -725,113 +725,143 @@ class GAM(Core, MetaTermMixin):
 
 
 
-    def _pirls_tweedie(self, X, y, weights):
+    def _tweedie_pirls(self, X, Y, weights):
         """
-        Performs stable PIRLS iterations to estimate GAM coefficients for Tweedie models
+        Performs stable PIRLS iterations to estimate GAM coefficients for Tweedie distribution
 
         Parameters
-        ----------
+        ---------
         X : array-like of shape (n_samples, m_features)
-            Input data
-        y : array-like of shape (n_samples,)
-            Target values
-        weights : array-like of shape (n_samples,)
-            Sample weights
+            containing input data
+        Y : array-like of shape (n,)
+            containing target data
+        weights : array-like of shape (n,)
+            containing sample weights
 
         Returns
         -------
         None
         """
-        # Build the model matrix
-        modelmat = self._modelmat(X)
+        modelmat = self._modelmat(X)  # build a basis matrix for the GLM
         n, m = modelmat.shape
 
-        # Initialize coefficients if necessary
-        if not self._is_fitted or len(self.coef_) != self.terms.n_coefs:
-            self.coef_ = self._initial_estimate(y, modelmat)
+        # initialize GLM coefficients if model is not yet fitted
+        if (
+            not self._is_fitted
+            or len(self.coef_) != self.terms.n_coefs
+            or not np.isfinite(self.coef_).all()
+        ):
+            # initialize the model
+            self.coef_ = self._initial_estimate(Y, modelmat)
 
-        # Ensure coefficients are finite
-        assert np.isfinite(self.coef_).all(), f"Invalid initial coefficients: {self.coef_}"
+        assert np.isfinite(
+            self.coef_
+        ).all(), "coefficients should be well-behaved, but found: {}".format(self.coef_)
 
-        # Prepare matrices for fitting
-        P = self._P()  # Penalty matrix
-        S = sp.sparse.diags(np.ones(m) * np.sqrt(np.finfo(float).eps))  # Improve conditioning
+        P = self._P()
+        S = sp.sparse.diags(np.ones(m) * np.sqrt(EPS))  # improve condition
 
-        # Compute Cholesky decomposition if no constraints
+        # if we don't have any constraints, then do cholesky now
         if not self.terms.hasconstraint:
             E = self._cholesky(S + P, sparse=False, verbose=self.verbose)
 
-        # Main PIRLS loop
-        for iter in range(self.max_iter):
-            # Recompute Cholesky if there are constraints
+        min_n_m = np.min([m, n])
+        Dinv = np.zeros((min_n_m + m, m)).T
+
+        for _ in range(self.max_iter):
+            # recompute cholesky if needed
             if self.terms.hasconstraint:
                 P = self._P()
                 C = self._C()
                 E = self._cholesky(S + P + C, sparse=False, verbose=self.verbose)
 
-            # Compute linear predictor and mean
+            # forward pass
+            y = deepcopy(Y)  # for simplicity
             lp = self._linear_predictor(modelmat=modelmat)
             mu = self.link.mu(lp, self.distribution)
-            mu = np.maximum(mu, np.finfo(float).eps)  # Ensure positive values
+            W = self._tweedie_W(mu, weights, y, self.tweedie_variance_power)  # create Tweedie PIRLS weight matrix
 
-            # Compute weights for Tweedie distribution
-            w = weights / (mu ** (self.tweedie_variance_power - 2))
-            W = sp.sparse.diags(w)
-
-            # Compute working residuals
-            z = (y - mu) / mu**(self.tweedie_variance_power - 1)
-
-            # Mask invalid values
+            # check for weights == 0, nan, and update
             mask = self._mask(W.diagonal())
-            y_masked = y[mask]
-            mu_masked = mu[mask]
-            z_masked = z[mask]
-            W_masked = sp.sparse.diags(W.diagonal()[mask])
+            y = y[mask]  # update
+            lp = lp[mask]  # update
+            mu = mu[mask]  # update
+            W = sp.sparse.diags(W.diagonal()[mask])  # update
 
-            # Compute pseudo-data
-            pseudo_data = lp[mask] + z_masked / self.link.gradient(mu_masked, self.distribution)
+            # PIRLS Wood pg 183
+            pseudo_data = W.dot(self._pseudo_data(y, lp, mu))
 
-            # Log iteration start
+            # log on-loop-start stats
             self._on_loop_start(vars())
 
-            # Compute weighted model matrix
-            WB = W_masked.dot(modelmat[mask, :])
+            WB = W.dot(modelmat[mask, :])  # common matrix product
             Q, R = np.linalg.qr(WB.A)
 
-            # Check for numerical issues in QR decomposition
-            if not (np.isfinite(Q).all() and np.isfinite(R).all()):
-                raise ValueError('QR decomposition produced NaN or Inf. Check input data.')
+            if not np.isfinite(Q).all() or not np.isfinite(R).all():
+                raise ValueError(
+                    'QR decomposition produced NaN or Inf. Check X data.'
+                )
 
-            # SVD for coefficient update
+            # need to recompute the number of singular values
+            min_n_m = np.min([m, n, mask.sum()])
+            Dinv = np.zeros((m, min_n_m))
+
+            # SVD
             U, d, Vt = np.linalg.svd(np.vstack([R, E]))
-            
-            # Compute new coefficients
-            idx = d > (d.max() * np.sqrt(np.finfo(float).eps))
-            d_inv = np.zeros_like(d)
-            d_inv[idx] = 1 / d[idx]
-            
-            B = (Vt.T * d_inv) @ U.T
-            coef_new = (B @ Q.T @ pseudo_data).flatten()
 
-            # Check for convergence
+            # mask out small singular values
+            # svd_mask = d <= (d.max() * np.sqrt(EPS))
+
+            np.fill_diagonal(Dinv, d**-1)  # invert the singular values
+            U1 = U[:min_n_m, :min_n_m]  # keep only top corner of U
+
+            # update coefficients
+            B = Vt.T.dot(Dinv).dot(U1.T).dot(Q.T)
+            coef_new = B.dot(pseudo_data).flatten()
             diff = np.linalg.norm(self.coef_ - coef_new) / np.linalg.norm(coef_new)
-            self.coef_ = coef_new
+            self.coef_ = coef_new  # update
 
-            # Log iteration end
+            # log on-loop-end stats
             self._on_loop_end(vars())
 
+            # check convergence
             if diff < self.tol:
                 break
 
-        # Estimate model statistics
+        # estimate statistics even if not converged
         self._estimate_model_statistics(
-            y, modelmat, weights=weights
+            Y, modelmat, inner=None, BW=WB.T, B=B, weights=weights, U1=U1
         )
+        if diff < self.tol:
+            return
 
-        if diff >= self.tol:
-            print('PIRLS did not converge. Consider increasing max_iter.')
-
+        print('did not converge')
         return
+
+    def _tweedie_W(self, mu, weights, y, p):
+        """
+        Compute the PIRLS weights for Tweedie distribution.
+
+        Parameters
+        ---------
+        mu : array-like of shape (n,)
+            The current mean predictions.
+        weights : array-like of shape (n,)
+            The sample weights.
+        y : array-like of shape (n,)
+            The target values.
+        p : float
+            Tweedie variance power parameter.
+
+        Returns
+        -------
+        W : array-like of shape (n, n)
+            Diagonal matrix of PIRLS weights.
+        """
+        var = mu ** p
+        W = np.diag(weights / var)
+        return W
+
 
     def _pirls(self, X, Y, weights):
         """
